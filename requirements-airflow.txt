@@ -1,0 +1,7 @@
+# Kept unpinned so pip resolves against Airflow's own SQLAlchemy constraint.
+# Pandas/pyarrow held deliberately to match the analytics layer.
+pandas==2.2.2
+pyarrow==16.1.0
+requests
+python-dotenv
+psycopg2-binary
