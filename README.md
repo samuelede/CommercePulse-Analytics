@@ -68,7 +68,7 @@ commercepulse/
 ## Prerequisites
 
 - Docker and Docker Compose
-- Python 3.11+ (only if running the pipeline outside Docker)
+- Python 3.11 specifically (only if running the pipeline outside Docker). Not 3.12+, Airflow 2.9.3 does not support it and several pinned dependencies have no wheels for newer versions. This matches the `apache/airflow:2.9.3-python3.11` base image.
 - A Monday.com account with an API token and a target board
 - Optional: a Calendarific API key (the pipeline falls back to the keyless Nager.Date API if none is supplied)
 
@@ -77,8 +77,8 @@ commercepulse/
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/samuelede/CommercePulse-Analytics.git
-cd CommercePulse-Analytics
+git clone <your-repo-url> commercepulse
+cd commercepulse
 cp .env.example .env
 ```
 
@@ -125,9 +125,24 @@ docker compose down -v        # remove volumes
 
 ## Run standalone (without Airflow)
 
+Create the virtual environment against Python 3.11 explicitly. If a newer
+interpreter is your system default, `python -m venv` will pick it up and the
+install will fail.
+
 ```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+# Windows (Git Bash)
+py -3.11 -m venv .venv
+source .venv/Scripts/activate
+
+# macOS / Linux
+python3.11 -m venv .venv
+source .venv/bin/activate
+```
+
+Confirm the interpreter before installing:
+
+```bash
+python --version                 # must report 3.11.x
 pip install -r requirements.txt
 cp .env.example .env             # set PG_* to a reachable Postgres
 ```
@@ -183,8 +198,40 @@ All settings come from environment variables (see `.env.example`). Key tunables:
 - `CHURN_DAYS_THRESHOLD` — days of inactivity before At-Risk / High churn
 - `HOLIDAY_COUNTRY`, `HOLIDAY_YEAR` — holiday lookup scope
 
+## Troubleshooting
+
+**`Failed to build 'pyarrow'` or `ModuleNotFoundError: No module named 'pkg_resources'` during install**
+
+The venv was built against a Python newer than 3.11. Check with `python --version`, then rebuild:
+
+```bash
+deactivate
+rm -rf .venv
+py -3.11 -m venv .venv          # Windows; use python3.11 on macOS/Linux
+source .venv/Scripts/activate
+pip install -r requirements.txt
+```
+
+**`numpy.dtype size changed, may indicate binary incompatibility`**
+
+numpy 2.x was installed alongside pandas 2.2.2. Reinstall from the pinned requirements:
+
+```bash
+pip install -r requirements.txt --force-reinstall
+```
+
+**`ModuleNotFoundError: No module named 'python'` when running the pipeline**
+
+`PYTHONPATH` is not set. Run from the project root with `PYTHONPATH=.` prefixed, as shown above.
+
+**Monday sync reports 0 items pushed**
+
+Either `MONDAY_API_TOKEN` / `MONDAY_BOARD_ID` are unset in `.env`, or the column IDs in `python/load/monday_crm.py` do not match your board. Monday assigns its own column IDs at board creation, verify them against the table in the setup section.
+
 ## Notes
 
 - PostgreSQL is mapped to host port 5434 to avoid clashing with the Mandera stack (5433).
-- pandas and pyarrow are pinned (2.2.2 / 16.1.0); other Airflow dependencies stay unpinned so pip resolves against Airflow's own SQLAlchemy constraint.
+- pandas is pinned to 2.2.2 and numpy to 1.26.4. numpy is deliberately held below 2.x: pandas 2.2.2 predates the numpy 2.0 ABI break, and pairing it with numpy 2.x can raise `numpy.dtype size changed` at import.
+- SQLAlchemy is pinned in `requirements.txt` but intentionally left unpinned in `requirements-airflow.txt`. Airflow 2.9.3 pins its own SQLAlchemy 1.4.x, so pinning 2.x on top of it produces an unresolvable conflict inside the image.
+- There is no pyarrow dependency. The pipeline reads and writes exclusively through SQLAlchemy/psycopg2 and never touches Parquet or Arrow.
 - The Holiday connector uses Calendarific when a key is set and falls back to the keyless Nager.Date API otherwise.
