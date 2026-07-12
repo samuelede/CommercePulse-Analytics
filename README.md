@@ -1,5 +1,8 @@
 # CommercePulse Analytics
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3119/)
+
 Customer intelligence and Reverse ETL platform built on the Mandera Analytics commerce data. CommercePulse extracts customer, product, and order data from PostgreSQL staging, builds customer segmentation and a Customer 360 view, enriches recommendations with public holiday data, and pushes the results into Monday CRM so marketing, sales, and customer success teams can act on them directly.
 
 Runs standalone: the stack includes its own seeded PostgreSQL, so no upstream pipeline is required to try it.
@@ -373,3 +376,55 @@ A name and email confirms the token works. Column IDs are resolved automatically
 - SQLAlchemy must be **2.x** in both the venv and the Airflow image. pandas 2.2.x requires it: pandas checks for the `Connectable` type that SQLAlchemy removed in 2.0, and under 1.4 it silently degrades to a raw DBAPI path that fails on every query. Airflow 2.9.3's constraint file pins 1.4, so `requirements-airflow.txt` deliberately overrides it and the Dockerfile asserts the result at build time.
 - There is no pyarrow dependency. The pipeline reads and writes exclusively through SQLAlchemy/psycopg2 and never touches Parquet or Arrow.
 - The Holiday connector uses Calendarific when a key is set and falls back to the keyless Nager.Date API otherwise.
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+**Development setup**
+
+```bash
+git clone https://github.com/samuelede/CommercePulse-Analytics.git
+cd CommercePulse-Analytics
+py -3.11 -m venv .venv          # Windows; python3.11 on macOS/Linux
+source .venv/Scripts/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+**Before opening a pull request**
+
+1. Branch from `main` using a descriptive name (`feature/`, `fix/`, `docs/`).
+2. Keep the test suite green:
+   ```bash
+   PYTHONPATH=. pytest tests/ -q
+   ```
+3. Add tests for new behaviour. Business rules in particular (segmentation thresholds, churn logic, campaign mapping) should be covered by a test that would fail if the rule were quietly changed.
+4. Run the health check if your change touches the stack:
+   ```bash
+   bash scripts/healthcheck.sh
+   ```
+5. Update the README if you change configuration, schemas, or the board layout.
+
+**Commit messages**
+
+Explain both what changed and why, and reference the concrete error or behaviour that prompted the fix. Prefer several purposeful commits over one large one.
+
+```
+Split total_orders from purchase_frequency in Customer 360
+
+purchase_frequency was a raw order count, which cannot distinguish four
+orders last month from four orders over three years. total_orders now
+carries the count; purchase_frequency is orders per month across the
+customer's active lifespan.
+```
+
+**Things to be careful with**
+
+- Never commit `.env`. It is gitignored; keep it that way.
+- Changing a column's type in `COLUMN_PLAN` requires deleting and recreating that column on the Monday board, since Monday cannot alter a column type after creation. `ensure_columns()` will raise with instructions rather than fail silently.
+- Dependency pins in `requirements.txt` and `requirements-airflow.txt` are load-bearing. See the Notes section before relaxing any of them.
+
+## License
+
+Released under the [MIT License](LICENSE).
