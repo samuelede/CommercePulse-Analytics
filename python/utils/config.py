@@ -7,9 +7,11 @@ load_dotenv()
 
 
 class Config:
-    # Source PostgreSQL (Mandera staging)
-    PG_HOST = os.getenv("PG_HOST", "postgres")
-    PG_PORT = os.getenv("PG_PORT", "5432")
+    # Source PostgreSQL (Mandera staging).
+    # Defaults target the host-published port. docker-compose overrides these
+    # with the internal service address (data-db:5432) for containerized runs.
+    PG_HOST = os.getenv("PG_HOST", "127.0.0.1")
+    PG_PORT = os.getenv("PG_PORT", "5434")
     PG_DB = os.getenv("PG_DB", "mandera")
     PG_USER = os.getenv("PG_USER", "postgres")
     PG_PASSWORD = os.getenv("PG_PASSWORD", "postgres")

@@ -1,25 +1,14 @@
 # CommercePulse Analytics
 
-Customer intelligence and Reverse ETL platform for the Mandera Analytics commerce ecosystem. CommercePulse extracts customer, product, and order data from PostgreSQL staging, builds customer segmentation and a Customer 360 view, enriches recommendations with public holiday data, and pushes the results into Monday CRM so marketing, sales, and customer success teams can act on them directly.
+Customer intelligence and Reverse ETL platform built on the Mandera Analytics commerce data. CommercePulse extracts customer, product, and order data from PostgreSQL staging, builds customer segmentation and a Customer 360 view, enriches recommendations with public holiday data, and pushes the results into Monday CRM so marketing, sales, and customer success teams can act on them directly.
+
+Runs standalone: the stack includes its own seeded PostgreSQL, so no upstream pipeline is required to try it.
 
 ## Architecture
 
-```
-PostgreSQL staging (Mandera)
-        │  extract
-        ▼
-   Pandas transforms ──► customer_segmentation ─┐
-        │                customer_360           │
-        │  enrich (Holiday API)                 │
-        ▼                                       │
-   campaign_recommendations ────────────────────┤
-        │                                       │
-        │  load                                 │
-        ▼                                       ▼
-   PostgreSQL analytics schema        Monday CRM (Reverse ETL)
-```
+![CommercePulse pipeline architecture](docs/pipeline-architecture.svg)
 
-Orchestrated by Apache Airflow, containerized with Docker.
+The pipeline moves customer data through six stages: extraction from Mandera's PostgreSQL staging schema, segmentation and Customer 360 analytics in Pandas, enrichment with public holiday data, validation, persistence into an analytics schema, and Reverse ETL activation into Monday CRM. Apache Airflow orchestrates the run; Docker containerizes the stack.
 
 ## Output datasets (analytics schema)
 
@@ -37,6 +26,9 @@ Segments: New Customer, Returning Customer, VIP Customer, At-Risk Customer.
 commercepulse/
 ├── dags/
 │   └── commercepulse_dag.py        # Airflow DAG
+├── docs/
+│   ├── pipeline-architecture.drawio  # Editable diagram source
+│   └── pipeline-architecture.svg     # Exported diagram (rendered in README)
 ├── python/
 │   ├── pipeline.py                 # Standalone end-to-end entrypoint
 │   ├── extract/extract_staging.py  # Pull staging tables
@@ -65,6 +57,19 @@ commercepulse/
 └── README.md
 ```
 
+## Relationship to the Mandera pipeline
+
+Mandera is the upstream source system: its batch pipeline (MongoDB Atlas → MinIO → PostgreSQL) lands cleaned customer, product, and order data into a PostgreSQL staging schema. CommercePulse reads from that schema and turns it into customer intelligence.
+
+**Mandera does not need to be running to use this project.** CommercePulse ships with its own PostgreSQL service and seed data, so it stands alone with a single `docker compose up`. Two ways to run it:
+
+| Mode | Source of staging data | When to use |
+|------|------------------------|-------------|
+| **Self-contained** (default) | Bundled `data-db` service, auto-seeded from `sql/02_seed_sample_data.sql` | Demos, evaluation, local development |
+| **Connected** | A live Mandera staging PostgreSQL | Running the two projects as one system |
+
+To switch to connected mode, point the `PG_*` variables in `.env` at the Mandera instance, delete `sql/02_seed_sample_data.sql` so it does not overwrite real data, and remove the `data-db` service (and its `depends_on` entry) from `docker-compose.yml`.
+
 ## Prerequisites
 
 - Docker and Docker Compose
@@ -77,27 +82,45 @@ commercepulse/
 ### 1. Clone and configure
 
 ```bash
-git clone <your-repo-url> commercepulse
-cd commercepulse
+git clone https://github.com/samuelede/CommercePulse-Analytics.git
+cd CommercePulse-Analytics
 cp .env.example .env
 ```
 
-Edit `.env` and set at minimum `MONDAY_API_TOKEN` and `MONDAY_BOARD_ID`. Adjust PostgreSQL values to point at your Mandera staging instance, or keep defaults to use the bundled `data-db` service.
+Edit `.env` and set `MONDAY_API_TOKEN` and `MONDAY_BOARD_ID`. Leave the `PG_*` defaults alone unless you are running in connected mode against a real Mandera instance.
 
 ### 2. Configure the Monday CRM board
 
-Create a board in Monday with these columns and note each column ID (Monday assigns IDs you can read from the column settings or the API). Map them in `python/load/monday_crm.py` if your IDs differ from the defaults:
+Create a board in Monday (**+ Add → New Board**) and take the board ID from its URL:
 
-| Column purpose | Default ID used | Type |
-|----------------|-----------------|------|
-| Segment | text_segment | Text |
-| Recommended campaign | text_campaign | Text |
-| Holiday | text_holiday | Text |
-| Days until holiday | numbers_days | Numbers |
-| Churn risk | text_churn | Text |
-| Lifetime value | numbers_ltv | Numbers |
+```
+https://your-account.monday.com/boards/1234567890
+                                       ^^^^^^^^^^ board ID
+```
 
-Put the board ID in `.env` as `MONDAY_BOARD_ID`.
+Put the token and board ID in `.env`:
+
+```
+MONDAY_API_TOKEN=your_personal_token
+MONDAY_BOARD_ID=1234567890
+```
+
+Get the token from monday.com: **avatar (bottom-left) → Administration → Developers → My Access Tokens → Show**.
+
+That is all the board setup required. The pipeline is self-configuring: on every run `ensure_columns()` reads the board and creates any column that is missing, so column IDs never need to be looked up or hardcoded. The columns it manages are:
+
+| Column | Type | Source |
+|--------|------|--------|
+| (item name) | — | customer_name |
+| Customer ID | Text | segmentation |
+| Segment | Status | segmentation |
+| Recommended Campaign | Text | campaigns |
+| Holiday | Text | Holiday API |
+| Days Until Holiday | Numbers | Holiday API |
+| Churn Risk | Status | Customer 360 |
+| Lifetime Value | Numbers | Customer 360 |
+
+Segment and Churn Risk are **status** columns so the board can be filtered and grouped by them. Labels are created automatically on first sync.
 
 ## Run with Docker (recommended)
 
@@ -112,9 +135,18 @@ docker compose up airflow-init
 docker compose up -d
 ```
 
-The bundled `data-db` service auto-loads `sql/01_create_analytics_schema.sql` and `sql/02_seed_sample_data.sql` on first start, giving you a working staging dataset for testing. If you point at a real Mandera staging DB instead, remove `02_seed_sample_data.sql` or skip the seed.
+On first start the `data-db` service auto-loads everything in `sql/`, creating the analytics schema and seeding staging with sample customers, products, and orders. The pipeline has data to work with immediately.
 
-Open the Airflow UI at http://localhost:8080 (login `airflow` / `airflow`), unpause `commercepulse_pipeline`, and trigger it.
+Open the Airflow UI at http://localhost:8080 and log in with `airflow` / `airflow`.
+
+The DAG appears **paused**. This is deliberate (`DAGS_ARE_PAUSED_AT_CREATION` is on), so a newly deployed DAG does not immediately start firing scheduled runs. To run it:
+
+1. Click the **toggle switch** to the left of `commercepulse_pipeline` to unpause it.
+2. Click the **play button** (top right) to trigger a manual run, rather than waiting for the `@daily` schedule.
+
+Set `MONDAY_API_TOKEN` and `MONDAY_BOARD_ID` in `.env` before the first run. Without them the `reverse_etl_monday` task logs an error and pushes zero items, while the upstream tasks still succeed, so the run looks healthy but nothing reaches the CRM.
+
+Task flow: `extract_staging` fans out to `build_segmentation` and `build_customer_360`; segmentation feeds `build_campaigns`; campaigns and customer_360 both feed `reverse_etl_monday`.
 
 Stop the stack:
 
@@ -159,7 +191,9 @@ Run the full pipeline:
 PYTHONPATH=. python -m python.pipeline
 ```
 
-Run analytics only, skipping the CRM push:
+`PYTHONPATH=.` puts the project root on the import path so absolute imports like `from python.utils.config import config` resolve. Run from the project root. The Docker containers do not need this; compose sets `PYTHONPATH=/opt/airflow` for them.
+
+Run analytics only, skipping the CRM push. Useful for confirming segmentation and Customer 360 land in Postgres before wiring up Monday:
 
 ```bash
 PYTHONPATH=. python -m python.pipeline --skip-crm
@@ -200,6 +234,28 @@ All settings come from environment variables (see `.env.example`). Key tunables:
 
 ## Troubleshooting
 
+**`could not translate host name "postgres" to address` / `connection refused`**
+
+`PG_HOST` is set to a Docker service name, which only resolves from inside the Docker network. Running from your venv on the host, use the published port instead:
+
+```
+PG_HOST=127.0.0.1
+PG_PORT=5434
+```
+
+The rule: **`data-db:5432` inside a container, `127.0.0.1:5434` on the host.** `docker-compose.yml` already injects the container values into Airflow, so `.env` only ever needs the host-side ones. Prefer `127.0.0.1` over `localhost` on Windows, where `localhost` can resolve to IPv6 and fail to connect.
+
+Check the database is actually up:
+
+```bash
+docker compose ps data-db
+docker compose exec data-db psql -U postgres -d mandera -c "\dt staging.*"
+```
+
+**DAG appears in the UI but never runs**
+
+It is paused. New DAGs default to paused so they do not immediately backfill. Click the toggle to the left of the DAG name to unpause, then use the play button to trigger a manual run.
+
 **`Failed to build 'pyarrow'` or `ModuleNotFoundError: No module named 'pkg_resources'` during install**
 
 The venv was built against a Python newer than 3.11. Check with `python --version`, then rebuild:
@@ -226,7 +282,16 @@ pip install -r requirements.txt --force-reinstall
 
 **Monday sync reports 0 items pushed**
 
-Either `MONDAY_API_TOKEN` / `MONDAY_BOARD_ID` are unset in `.env`, or the column IDs in `python/load/monday_crm.py` do not match your board. Monday assigns its own column IDs at board creation, verify them against the table in the setup section.
+`MONDAY_API_TOKEN` or `MONDAY_BOARD_ID` is unset in `.env`, or the token lacks access to that board. Verify the token first:
+
+```bash
+PYTHONPATH=. python -c "
+from python.load.monday_crm import monday_request
+print(monday_request('query { me { name email } }'))
+"
+```
+
+A name and email confirms the token works. Column IDs are resolved automatically at runtime, so they are never the cause.
 
 ## Notes
 
