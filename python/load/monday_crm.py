@@ -67,6 +67,12 @@ def ensure_columns():
 
     Monday assigns its own internal column ids at creation time, so the board
     must always be read back rather than assumed.
+
+    Columns are matched on title AND type. A title that exists with the wrong
+    type is a real problem: sending a status-shaped value into a text column
+    fails with ColumnValueException. This happens when COLUMN_PLAN changes
+    after a board was already built. Rather than silently mismatching, raise
+    with instructions.
     """
     read = """
     query ($board: [ID!]) {
@@ -79,27 +85,55 @@ def ensure_columns():
             f"Board {config.MONDAY_BOARD_ID} not found or not accessible"
         )
 
-    title_to_id = {c["title"]: c["id"] for c in boards[0]["columns"]}
+    existing = {c["title"]: c for c in boards[0]["columns"]}
 
     create = """
     mutation ($board: ID!, $title: String!, $type: ColumnType!) {
       create_column (board_id: $board, title: $title, column_type: $type) {
-        id title
+        id title type
       }
     }
     """
-    for title, col_type in COLUMN_PLAN.values():
-        if title not in title_to_id:
+
+    title_to_id = {}
+    mismatched = []
+
+    for title, want_type in COLUMN_PLAN.values():
+        col = existing.get(title)
+        if col is None:
             new_col = monday_request(
                 create,
                 {
                     "board": str(config.MONDAY_BOARD_ID),
                     "title": title,
-                    "type": col_type,
+                    "type": want_type,
                 },
             )["create_column"]
             title_to_id[title] = new_col["id"]
-            logger.info("Created column '%s' (id=%s)", title, new_col["id"])
+            logger.info(
+                "Created column '%s' (%s, id=%s)",
+                title,
+                want_type,
+                new_col["id"],
+            )
+        elif col["type"] != want_type:
+            mismatched.append((title, col["type"], want_type, col["id"]))
+        else:
+            title_to_id[title] = col["id"]
+
+    if mismatched:
+        lines = "\n".join(
+            f"    '{t}': board has '{have}', pipeline expects '{want}' (id={cid})"
+            for t, have, want, cid in mismatched
+        )
+        raise RuntimeError(
+            "Monday board has columns with the wrong type:\n"
+            f"{lines}\n\n"
+            "Monday cannot change a column's type after creation. Delete these "
+            "columns in the board UI (column header dropdown > Delete) and "
+            "rerun; they will be recreated with the correct type. Deleting the "
+            "items as well gives the cleanest result."
+        )
 
     return title_to_id
 
@@ -193,7 +227,17 @@ def sync_campaigns(campaigns, customer_360=None, segmentation=None):
                 },
             )
             pushed += 1
-        except (requests.RequestException, RuntimeError) as exc:
+        except RuntimeError as exc:
+            # A schema-level error (bad column type, bad value shape) will fail
+            # identically for every row. Stop rather than hammering the API.
+            if "ColumnValueException" in str(exc):
+                raise RuntimeError(
+                    f"Monday rejected the column values for {cid}. This is a "
+                    "schema problem and will fail for every row, so the sync "
+                    f"is stopping.\n\n{exc}"
+                ) from exc
+            logger.warning("Failed to push %s: %s", cid, exc)
+        except requests.RequestException as exc:
             logger.warning("Failed to push %s: %s", cid, exc)
 
         time.sleep(RATE_LIMIT_SLEEP)

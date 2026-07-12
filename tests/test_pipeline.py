@@ -101,3 +101,61 @@ def test_column_plan_covers_payload():
     # Status columns must be the two categorical fields
     status_fields = {f for f, (_, t) in COLUMN_PLAN.items() if t == "status"}
     assert status_fields == {"segment", "churn_risk"}
+
+
+def test_ensure_columns_rejects_type_mismatch():
+    """A column with the right title but wrong type must not be silently reused.
+
+    Monday cannot change a column's type after creation, so sending a status
+    payload into a text column fails with ColumnValueException on every row.
+    """
+    from unittest.mock import patch
+
+    import pytest
+
+    import python.load.monday_crm as m
+
+    stale_board = [
+        {"id": "text_1", "title": "Segment", "type": "text"},  # should be status
+        {"id": "text_2", "title": "Recommended Campaign", "type": "text"},
+        {"id": "text_3", "title": "Holiday", "type": "text"},
+        {"id": "num_4", "title": "Days Until Holiday", "type": "numbers"},
+        {"id": "text_5", "title": "Churn Risk", "type": "text"},  # should be status
+        {"id": "num_6", "title": "Lifetime Value", "type": "numbers"},
+        {"id": "text_7", "title": "Customer ID", "type": "text"},
+    ]
+
+    with patch.object(m.config, "MONDAY_API_TOKEN", "x"), patch.object(
+        m.config, "MONDAY_BOARD_ID", "123"
+    ), patch.object(
+        m, "monday_request", return_value={"boards": [{"columns": stale_board}]}
+    ):
+        with pytest.raises(RuntimeError, match="wrong type"):
+            m.ensure_columns()
+
+
+def test_ensure_columns_accepts_correct_board():
+    from unittest.mock import patch
+
+    import python.load.monday_crm as m
+
+    good_board = [
+        {"id": "status_1", "title": "Segment", "type": "status"},
+        {"id": "text_2", "title": "Recommended Campaign", "type": "text"},
+        {"id": "text_3", "title": "Holiday", "type": "text"},
+        {"id": "num_4", "title": "Days Until Holiday", "type": "numbers"},
+        {"id": "status_5", "title": "Churn Risk", "type": "status"},
+        {"id": "num_6", "title": "Lifetime Value", "type": "numbers"},
+        {"id": "text_7", "title": "Customer ID", "type": "text"},
+    ]
+
+    with patch.object(m.config, "MONDAY_API_TOKEN", "x"), patch.object(
+        m.config, "MONDAY_BOARD_ID", "123"
+    ), patch.object(
+        m, "monday_request", return_value={"boards": [{"columns": good_board}]}
+    ):
+        cols = m.ensure_columns()
+
+    assert cols["Segment"] == "status_1"
+    assert cols["Churn Risk"] == "status_5"
+    assert len(cols) == 7
