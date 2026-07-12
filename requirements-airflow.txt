@@ -1,0 +1,16 @@
+# Installed on top of apache/airflow:2.9.3-python3.11.
+#
+# SQLAlchemy MUST be 2.x here. pandas 2.2.x checks for the SQLAlchemy
+# `Connectable` type, which was removed in SQLAlchemy 2.0. Under the 1.4 that
+# Airflow's constraint file pins, that check fails, pandas silently falls back
+# to its raw-DBAPI path, and every read_sql/to_sql dies with
+#   AttributeError: 'Engine' object has no attribute 'cursor'
+# Airflow 2.9.3 runs correctly on SQLAlchemy 2.x despite the conservative pin.
+SQLAlchemy>=2.0.30,<2.1
+
+# numpy < 2 for binary compatibility with pandas 2.2.2.
+pandas==2.2.2
+numpy==1.26.4
+requests
+python-dotenv
+psycopg2-binary

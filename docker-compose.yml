@@ -1,0 +1,95 @@
+# CommercePulse local stack: PostgreSQL (staging+analytics) + Airflow.
+# PostgreSQL mapped to host port 5434 to avoid clashing with Mandera (5433).
+x-airflow-common: &airflow-common
+  build: .
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # App env: point staging at the data-db service
+    PG_HOST: data-db
+    PG_PORT: 5432
+    PG_DB: ${PG_DB:-mandera}
+    PG_USER: ${PG_USER:-postgres}
+    PG_PASSWORD: ${PG_PASSWORD:-postgres}
+    PG_STAGING_SCHEMA: ${PG_STAGING_SCHEMA:-staging}
+    PG_ANALYTICS_SCHEMA: ${PG_ANALYTICS_SCHEMA:-analytics}
+    HOLIDAY_API_KEY: ${HOLIDAY_API_KEY:-}
+    HOLIDAY_COUNTRY: ${HOLIDAY_COUNTRY:-GB}
+    HOLIDAY_YEAR: ${HOLIDAY_YEAR:-2026}
+    MONDAY_API_TOKEN: ${MONDAY_API_TOKEN:-}
+    MONDAY_API_URL: ${MONDAY_API_URL:-https://api.monday.com/v2}
+    MONDAY_BOARD_ID: ${MONDAY_BOARD_ID:-}
+    PYTHONPATH: /opt/airflow
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./python:/opt/airflow/python
+    - ./logs:/opt/airflow/logs
+  depends_on:
+    airflow-db:
+      condition: service_healthy
+    data-db:
+      condition: service_healthy
+
+services:
+  # Metadata DB for Airflow
+  airflow-db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+
+  # Staging + analytics data DB (stands in for Mandera staging)
+  data-db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-postgres}
+      POSTGRES_DB: ${PG_DB:-mandera}
+    ports:
+      - "5434:5432"
+    volumes:
+      - data-db-data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${PG_USER:-postgres}"]
+      interval: 5s
+      retries: 5
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "${_AIRFLOW_WWW_USER_USERNAME:-airflow}" \
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" \
+          --firstname admin --lastname admin --role Admin \
+          --email admin@example.com || true
+    restart: on-failure
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: always
+
+volumes:
+  airflow-db-data:
+  data-db-data:
