@@ -66,3 +66,38 @@ def test_campaigns():
     validate_campaigns(camp)
     vip = camp.loc[camp.customer_id == "C1", "recommended_campaign"].iloc[0]
     assert vip == "Premium Loyalty Campaign"
+
+
+def test_value_for_column_types():
+    """Monday requires type-specific value shapes; numbers must be strings."""
+    from python.load.monday_crm import value_for_column
+
+    assert value_for_column("status", "VIP Customer") == {"label": "VIP Customer"}
+    assert value_for_column("numbers", 2600.0) == "2600.0"
+    assert value_for_column("numbers", 30) == "30"
+    assert value_for_column("text", "Christmas") == "Christmas"
+    assert value_for_column("date", "2026-12-25") == {"date": "2026-12-25"}
+
+    # Missing values must not blow up the payload
+    assert value_for_column("numbers", None) == "0"
+    assert value_for_column("text", None) == ""
+    assert value_for_column("numbers", float("nan")) == "0"
+
+
+def test_column_plan_covers_payload():
+    """Every field the sync builds must have a column planned for it."""
+    from python.load.monday_crm import COLUMN_PLAN
+
+    required = {
+        "customer_id",
+        "segment",
+        "recommended_campaign",
+        "holiday_name",
+        "days_until_holiday",
+        "churn_risk",
+        "lifetime_value",
+    }
+    assert required == set(COLUMN_PLAN)
+    # Status columns must be the two categorical fields
+    status_fields = {f for f, (_, t) in COLUMN_PLAN.items() if t == "status"}
+    assert status_fields == {"segment", "churn_risk"}

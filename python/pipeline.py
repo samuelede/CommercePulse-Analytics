@@ -51,7 +51,7 @@ def run(skip_crm=False):
     if skip_crm:
         logger.info("Skipping Monday CRM sync (--skip-crm)")
     else:
-        sync_campaigns(campaigns, c360)
+        sync_campaigns(campaigns, c360, segmentation)
 
     logger.info("=== CommercePulse pipeline complete ===")
 

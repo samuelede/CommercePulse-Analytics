@@ -74,7 +74,8 @@ def _reverse_etl(**ctx):
 
     camp = pd.read_json(ctx["ti"].xcom_pull(key="campaigns"), orient="split")
     c360 = pd.read_json(ctx["ti"].xcom_pull(key="customer_360"), orient="split")
-    sync_campaigns(camp, c360)
+    seg = pd.read_json(ctx["ti"].xcom_pull(key="segmentation"), orient="split")
+    sync_campaigns(camp, c360, seg)
 
 
 with DAG(
