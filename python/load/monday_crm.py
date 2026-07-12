@@ -40,6 +40,8 @@ COLUMN_PLAN = {
     "days_until_holiday":   ("Days Until Holiday",   "numbers"),
     "churn_risk":           ("Churn Risk",           "status"),
     "lifetime_value":       ("Lifetime Value",       "numbers"),
+    "total_orders":         ("Total Orders",         "numbers"),
+    "purchase_frequency":   ("Orders / Month",       "numbers"),
 }
 
 
@@ -205,6 +207,8 @@ def sync_campaigns(campaigns, customer_360=None, segmentation=None):
             "days_until_holiday": row["days_until_holiday"],
             "churn_risk": meta.get("churn_risk"),
             "lifetime_value": meta.get("lifetime_value"),
+            "total_orders": meta.get("total_orders"),
+            "purchase_frequency": meta.get("purchase_frequency"),
         }
 
         column_values = {}

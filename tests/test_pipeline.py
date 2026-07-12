@@ -51,11 +51,70 @@ def test_customer_360():
     customers, products, orders = _fixtures()
     c360 = build_customer_360(customers, products, orders)
     validate_customer_360(c360)
-    assert c360.loc[c360.customer_id == "C1", "lifetime_value"].iloc[0] == 6300
-    assert (
-        c360.loc[c360.customer_id == "C1", "preferred_category"].iloc[0]
-        == "Electronics"
+    c1 = c360[c360.customer_id == "C1"].iloc[0]
+    assert c1["lifetime_value"] == 6300
+    assert c1["total_orders"] == 3
+    assert c1["preferred_category"] == "Electronics"
+    # C3 has no orders at all
+    c3 = c360[c360.customer_id == "C3"].iloc[0]
+    assert c3["total_orders"] == 0
+    assert c3["lifetime_value"] == 0
+    assert c3["purchase_frequency"] == 0
+    assert c3["churn_risk"] == "High"
+
+
+def test_purchase_frequency_is_a_rate_not_a_count():
+    """Two customers with identical order counts but different tenures must
+    get different frequencies. A bare count cannot distinguish them."""
+    import pandas as pd
+
+    from python.transform.customer_360 import build_customer_360
+
+    customers = pd.DataFrame(
+        {"customer_id": ["FAST", "SLOW"], "name": ["Fast", "Slow"]}
     )
+    products = pd.DataFrame(
+        {"product_id": ["P1"], "category": ["Electronics"]}
+    )
+
+    now = pd.Timestamp.now("UTC").tz_localize(None)
+    rows = []
+    # FAST: 4 orders in the last ~3 weeks
+    for i in range(4):
+        rows.append(
+            {
+                "order_id": f"F{i}",
+                "customer_id": "FAST",
+                "product_id": "P1",
+                "amount": 100,
+                "payment_status": "completed",
+                "created_at": now - pd.Timedelta(days=i * 7),
+            }
+        )
+    # SLOW: 4 orders spread over ~2 years
+    for i in range(4):
+        rows.append(
+            {
+                "order_id": f"S{i}",
+                "customer_id": "SLOW",
+                "product_id": "P1",
+                "amount": 100,
+                "payment_status": "completed",
+                "created_at": now - pd.Timedelta(days=i * 180),
+            }
+        )
+    orders = pd.DataFrame(rows)
+
+    c360 = build_customer_360(customers, products, orders)
+    fast = c360[c360.customer_id == "FAST"].iloc[0]
+    slow = c360[c360.customer_id == "SLOW"].iloc[0]
+
+    # Same raw count...
+    assert fast["total_orders"] == slow["total_orders"] == 4
+    # ...but very different rates.
+    assert fast["purchase_frequency"] > slow["purchase_frequency"]
+    assert fast["purchase_frequency"] > 3.0   # ~4 orders in ~1 month
+    assert slow["purchase_frequency"] < 1.0   # ~4 orders over ~18 months
 
 
 def test_campaigns():
@@ -96,6 +155,8 @@ def test_column_plan_covers_payload():
         "days_until_holiday",
         "churn_risk",
         "lifetime_value",
+        "total_orders",
+        "purchase_frequency",
     }
     assert required == set(COLUMN_PLAN)
     # Status columns must be the two categorical fields
@@ -123,6 +184,8 @@ def test_ensure_columns_rejects_type_mismatch():
         {"id": "text_5", "title": "Churn Risk", "type": "text"},  # should be status
         {"id": "num_6", "title": "Lifetime Value", "type": "numbers"},
         {"id": "text_7", "title": "Customer ID", "type": "text"},
+        {"id": "num_8", "title": "Total Orders", "type": "numbers"},
+        {"id": "num_9", "title": "Orders / Month", "type": "numbers"},
     ]
 
     with patch.object(m.config, "MONDAY_API_TOKEN", "x"), patch.object(
@@ -147,6 +210,8 @@ def test_ensure_columns_accepts_correct_board():
         {"id": "status_5", "title": "Churn Risk", "type": "status"},
         {"id": "num_6", "title": "Lifetime Value", "type": "numbers"},
         {"id": "text_7", "title": "Customer ID", "type": "text"},
+        {"id": "num_8", "title": "Total Orders", "type": "numbers"},
+        {"id": "num_9", "title": "Orders / Month", "type": "numbers"},
     ]
 
     with patch.object(m.config, "MONDAY_API_TOKEN", "x"), patch.object(
@@ -158,4 +223,5 @@ def test_ensure_columns_accepts_correct_board():
 
     assert cols["Segment"] == "status_1"
     assert cols["Churn Risk"] == "status_5"
-    assert len(cols) == 7
+    assert cols["Total Orders"] == "num_8"
+    assert len(cols) == 9

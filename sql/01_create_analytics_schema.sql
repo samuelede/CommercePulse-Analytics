@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS analytics.customer_segmentation (
 CREATE TABLE IF NOT EXISTS analytics.customer_360 (
     customer_id        TEXT PRIMARY KEY,
     lifetime_value     NUMERIC(12, 2),
-    purchase_frequency INTEGER,
+    total_orders       INTEGER,
+    purchase_frequency NUMERIC(8, 2),   -- orders per month over active lifespan
     last_purchase_date TIMESTAMP,
     preferred_category TEXT,
     churn_risk         TEXT

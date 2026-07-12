@@ -15,10 +15,12 @@ The pipeline moves customer data through six stages: extraction from Mandera's P
 | Table | Key columns |
 |-------|-------------|
 | `customer_segmentation` | customer_id, customer_name, total_orders, total_spend, segment |
-| `customer_360` | customer_id, lifetime_value, purchase_frequency, last_purchase_date, preferred_category, churn_risk |
+| `customer_360` | customer_id, lifetime_value, total_orders, purchase_frequency, last_purchase_date, preferred_category, churn_risk |
 | `campaign_recommendations` | customer_id, segment, holiday_name, days_until_holiday, recommended_campaign |
 
 Segments: New Customer, Returning Customer, VIP Customer, At-Risk Customer.
+
+`purchase_frequency` is a **rate**, orders per month across the customer's active lifespan (first purchase to today), not a raw count. `total_orders` carries the count. The distinction matters: two customers with four orders each are very different propositions if one bought them last month and the other over three years, and a bare count cannot tell them apart.
 
 ## Repository layout
 
@@ -122,6 +124,8 @@ That is all the board setup required. The pipeline is self-configuring: on every
 | Days Until Holiday | Numbers | Holiday API |
 | Churn Risk | Status | Customer 360 |
 | Lifetime Value | Numbers | Customer 360 |
+| Total Orders | Numbers | Customer 360 |
+| Orders / Month | Numbers | Customer 360 |
 
 Segment and Churn Risk are **status** columns so the board can be filtered and grouped by them. Labels are created automatically on first sync.
 
