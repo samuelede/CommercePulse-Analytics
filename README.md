@@ -1,7 +1,14 @@
 # CommercePulse Analytics
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3119/)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3119/)
+[![Apache Airflow](https://img.shields.io/badge/Apache%20Airflow-2.9.3-017CEE.svg?logo=apacheairflow&logoColor=white)](https://airflow.apache.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169E1.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![pandas](https://img.shields.io/badge/pandas-2.2.2-150458.svg?logo=pandas&logoColor=white)](https://pandas.pydata.org/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED.svg?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![Monday.com](https://img.shields.io/badge/Monday.com-GraphQL%20API-FF3D57.svg?logo=mondaydotcom&logoColor=white)](https://developer.monday.com/api-reference/)
+[![Tests](https://img.shields.io/badge/tests-12%20passing-brightgreen.svg)](tests/)
+[![Reverse ETL](https://img.shields.io/badge/pattern-Reverse%20ETL-6A1B9A.svg)]()
 
 Customer intelligence and Reverse ETL platform built on the Mandera Analytics commerce data. CommercePulse extracts customer, product, and order data from PostgreSQL staging, builds customer segmentation and a Customer 360 view, enriches recommendations with public holiday data, and pushes the results into Monday CRM so marketing, sales, and customer success teams can act on them directly.
 
@@ -287,6 +294,20 @@ All settings come from environment variables (see `.env.example`). Key tunables:
 - `RETURNING_ORDER_THRESHOLD` — minimum orders for Returning segment
 - `CHURN_DAYS_THRESHOLD` — days of inactivity before At-Risk / High churn
 - `HOLIDAY_COUNTRY`, `HOLIDAY_YEAR` — holiday lookup scope
+- `HOLIDAY_MIN_LEAD_DAYS` (default 14) — minimum days before a holiday for it to be selected
+- `HOLIDAY_NATIONWIDE_ONLY` (default true) — exclude subdivision-specific holidays
+
+### Holiday selection
+
+Campaign recommendations anchor to a single upcoming holiday, and picking the *nearest* one is not the same as picking a *useful* one. Two filters make the choice defensible:
+
+**Lead time.** A holiday two days away cannot be planned around. There is no time to brief, build, and ship a campaign, so a recommendation pegged to it is accurate and worthless. The pipeline selects the nearest holiday at least `HOLIDAY_MIN_LEAD_DAYS` out.
+
+**Nationwide only.** A UK holiday query returns regional dates such as the Battle of the Boyne (Northern Ireland) and St Andrew's Day (Scotland). Anchoring a nationwide campaign to a holiday most customers do not observe is a business error. Regional holidays are excluded by default.
+
+Both are configurable. Setting `HOLIDAY_MIN_LEAD_DAYS=0` and `HOLIDAY_NATIONWIDE_ONLY=false` restores naive nearest-holiday behaviour.
+
+The lookup spans `HOLIDAY_YEAR` and the following year, so a run in December still finds an actionable holiday rather than falling off the end of the calendar.
 
 ## Troubleshooting
 

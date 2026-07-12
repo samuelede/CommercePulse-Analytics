@@ -225,3 +225,94 @@ def test_ensure_columns_accepts_correct_board():
     assert cols["Churn Risk"] == "status_5"
     assert cols["Total Orders"] == "num_8"
     assert len(cols) == 9
+
+
+# ---------------------------------------------------------------------------
+# Holiday selection
+# ---------------------------------------------------------------------------
+
+def _fake_nager_rows(year):
+    """Realistic Nager.Date GB payload: a mix of regional and nationwide."""
+    by_year = {
+        2026: [
+            ("Battle of the Boyne", f"{year}-07-13", False),   # NI only
+            ("Scottish Summer Bank Holiday", f"{year}-08-03", False),  # Scotland
+            ("Summer Bank Holiday", f"{year}-08-31", True),
+            ("St Andrew's Day", f"{year}-11-30", False),       # Scotland
+            ("Christmas Day", f"{year}-12-25", True),
+        ],
+        2027: [("New Year's Day", "2027-01-01", True)],
+    }
+    return [
+        {"holiday_name": n, "holiday_date": d, "nationwide": w}
+        for n, d, w in by_year.get(year, [])
+    ]
+
+
+def test_regional_holidays_are_excluded():
+    """A nationwide campaign must not be anchored to a regional holiday."""
+    from unittest.mock import patch
+
+    import python.enrich.holiday_api as h
+
+    with patch.object(h, "_fetch_nager", side_effect=_fake_nager_rows), patch.object(
+        h.config, "HOLIDAY_API_KEY", ""
+    ):
+        df = h.get_holidays(nationwide_only=True, min_lead_days=0)
+
+    names = set(df["holiday_name"])
+    assert "Battle of the Boyne" not in names
+    assert "St Andrew's Day" not in names
+    assert df["nationwide"].all()
+
+
+def test_min_lead_days_excludes_imminent_holidays():
+    """A holiday a day away is accurate but useless: no time to run a campaign."""
+    from unittest.mock import patch
+
+    import python.enrich.holiday_api as h
+
+    with patch.object(h, "_fetch_nager", side_effect=_fake_nager_rows), patch.object(
+        h.config, "HOLIDAY_API_KEY", ""
+    ):
+        # No lead-time floor: the imminent regional date is the nearest.
+        loose = h.get_holidays(nationwide_only=False, min_lead_days=0)
+        assert loose.iloc[0]["holiday_name"] == "Battle of the Boyne"
+        assert loose.iloc[0]["days_until_holiday"] < 14
+
+        # With a floor, nothing inside the window survives.
+        strict = h.get_holidays(nationwide_only=False, min_lead_days=14)
+        assert (strict["days_until_holiday"] >= 14).all()
+        assert "Battle of the Boyne" not in set(strict["holiday_name"])
+
+
+def test_get_next_holiday_is_actionable():
+    """Both filters together must yield a nationwide, plannable holiday."""
+    from unittest.mock import patch
+
+    import python.enrich.holiday_api as h
+
+    with patch.object(h, "_fetch_nager", side_effect=_fake_nager_rows), patch.object(
+        h.config, "HOLIDAY_API_KEY", ""
+    ):
+        holiday = h.get_next_holiday(nationwide_only=True, min_lead_days=14)
+
+    assert holiday is not None
+    assert holiday["holiday_name"] == "Summer Bank Holiday"
+    assert holiday["days_until_holiday"] >= 14
+
+
+def test_campaigns_handle_no_holiday_found():
+    """If no holiday clears the filters, campaigns still generate."""
+    import pandas as pd
+
+    from python.enrich.campaigns import build_campaigns
+
+    seg = pd.DataFrame(
+        {"customer_id": ["C1"], "segment": ["VIP Customer"]}
+    )
+    camp = build_campaigns(seg, holiday=None)
+
+    assert len(camp) == 1
+    assert camp.iloc[0]["recommended_campaign"] == "Premium Loyalty Campaign"
+    assert camp["holiday_name"].notna().all()
