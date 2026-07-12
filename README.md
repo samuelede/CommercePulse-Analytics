@@ -48,6 +48,9 @@ commercepulse/
 ├── sql/
 │   ├── 01_create_analytics_schema.sql
 │   └── 02_seed_sample_data.sql     # Optional local test data
+├── scripts/
+│   ├── healthcheck.sh              # Validate every layer of the stack
+│   └── check_monday.py             # Verify Monday token and board
 ├── tests/test_pipeline.py
 ├── requirements.txt
 ├── requirements-airflow.txt
@@ -212,16 +215,62 @@ PYTHONPATH=. python -m python.enrich.holiday_api
 PYTHONPATH=. pytest tests/ -q
 ```
 
-## Verifying outputs
+## Verifying the stack
 
-After a run, inspect the analytics tables:
+Run the health check. It validates each layer independently, so a failure tells you exactly where the problem is:
 
 ```bash
+bash scripts/healthcheck.sh
+```
+
+It checks container status, the SQLAlchemy version inside the image, webserver reachability, staging data, analytics outputs, and Monday credentials.
+
+To check just the Monday connection:
+
+```bash
+PYTHONPATH=. python scripts/check_monday.py
+```
+
+### Manual checks
+
+```bash
+# Containers up?
+docker compose ps
+
+# Webserver serving?
+curl -I http://127.0.0.1:8080/health
+
+# Correct SQLAlchemy in the image?
+docker compose exec airflow-scheduler python -c "import sqlalchemy; print(sqlalchemy.__version__)"
+
+# Staging seeded?
+docker compose exec data-db psql -U postgres -d mandera -c "\dt staging.*"
+
+# Analytics populated?
 docker compose exec data-db psql -U postgres -d mandera \
   -c "SELECT segment, count(*) FROM analytics.customer_segmentation GROUP BY 1;"
 ```
 
-Then confirm items appear on your Monday board.
+## Populating Monday CRM
+
+Airflow is only the scheduler. The pipeline runs without it, which is the quickest way to prove the data path end to end.
+
+```bash
+# 1. Analytics only. Confirms extract, transform, and load work.
+python -m python.pipeline --skip-crm
+
+# 2. Confirm the outputs landed.
+docker compose exec data-db psql -U postgres -d mandera \
+  -c "SELECT * FROM analytics.campaign_recommendations;"
+
+# 3. Confirm Monday is reachable and see which columns will be created.
+PYTHONPATH=. python scripts/check_monday.py
+
+# 4. Full run. Creates any missing board columns, then syncs.
+python -m python.pipeline
+```
+
+Step 4 logs `Synced N of N items to Monday CRM`. The board will then show one item per customer, titled with the customer name, with Segment and Churn Risk as colour-coded status columns.
 
 ## Configuration reference
 
@@ -233,6 +282,26 @@ All settings come from environment variables (see `.env.example`). Key tunables:
 - `HOLIDAY_COUNTRY`, `HOLIDAY_YEAR` — holiday lookup scope
 
 ## Troubleshooting
+
+**`AttributeError: 'Engine' object has no attribute 'cursor'` in an Airflow task**
+
+SQLAlchemy 1.4 is installed in the image. pandas 2.2.x checks for the SQLAlchemy `Connectable` type, which was removed in 2.0, so under 1.4 the check fails, pandas falls back to its raw DBAPI path, and every `read_sql`/`to_sql` breaks with this misleading error.
+
+Airflow's constraint file pins SQLAlchemy 1.4, so the image must override it. `requirements-airflow.txt` pins `SQLAlchemy>=2.0.30`, and the Dockerfile asserts the version at build time. If you hit this, the image is stale:
+
+```bash
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+```
+
+Confirm the version inside the container:
+
+```bash
+docker compose exec airflow-scheduler python -c "import sqlalchemy; print(sqlalchemy.__version__)"
+```
+
+Anything below 2.0 means the rebuild did not take.
 
 **`could not translate host name "postgres" to address` / `connection refused`**
 
@@ -297,6 +366,6 @@ A name and email confirms the token works. Column IDs are resolved automatically
 
 - PostgreSQL is mapped to host port 5434 to avoid clashing with the Mandera stack (5433).
 - pandas is pinned to 2.2.2 and numpy to 1.26.4. numpy is deliberately held below 2.x: pandas 2.2.2 predates the numpy 2.0 ABI break, and pairing it with numpy 2.x can raise `numpy.dtype size changed` at import.
-- SQLAlchemy is pinned in `requirements.txt` but intentionally left unpinned in `requirements-airflow.txt`. Airflow 2.9.3 pins its own SQLAlchemy 1.4.x, so pinning 2.x on top of it produces an unresolvable conflict inside the image.
+- SQLAlchemy must be **2.x** in both the venv and the Airflow image. pandas 2.2.x requires it: pandas checks for the `Connectable` type that SQLAlchemy removed in 2.0, and under 1.4 it silently degrades to a raw DBAPI path that fails on every query. Airflow 2.9.3's constraint file pins 1.4, so `requirements-airflow.txt` deliberately overrides it and the Dockerfile asserts the result at build time.
 - There is no pyarrow dependency. The pipeline reads and writes exclusively through SQLAlchemy/psycopg2 and never touches Parquet or Arrow.
 - The Holiday connector uses Calendarific when a key is set and falls back to the keyless Nager.Date API otherwise.
