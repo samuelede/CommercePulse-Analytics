@@ -26,6 +26,18 @@ class Config:
     HOLIDAY_COUNTRY = os.getenv("HOLIDAY_COUNTRY", "GB")
     HOLIDAY_YEAR = os.getenv("HOLIDAY_YEAR", "2026")
 
+    # Minimum lead time before a holiday for it to be worth planning a campaign
+    # around. A holiday two days out is accurate but useless: there is no time
+    # to brief, build, and ship. 14 days is a realistic floor.
+    HOLIDAY_MIN_LEAD_DAYS = int(os.getenv("HOLIDAY_MIN_LEAD_DAYS", "14"))
+
+    # Exclude subdivision-specific holidays (e.g. Battle of the Boyne, which is
+    # Northern Ireland only). Anchoring a nationwide campaign to a regional
+    # holiday is a business error, not just an odd-looking one.
+    HOLIDAY_NATIONWIDE_ONLY = (
+        os.getenv("HOLIDAY_NATIONWIDE_ONLY", "true").lower() == "true"
+    )
+
     # Monday CRM
     MONDAY_API_TOKEN = os.getenv("MONDAY_API_TOKEN", "")
     MONDAY_API_URL = os.getenv("MONDAY_API_URL", "https://api.monday.com/v2")

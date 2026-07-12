@@ -15,15 +15,26 @@ CAMPAIGN_RULES = {
 }
 
 
-def build_campaigns(segmentation, holiday=None):
-    """Return campaign recommendation dataset."""
-    if holiday is None:
+_UNSET = object()
+
+
+def build_campaigns(segmentation, holiday=_UNSET):
+    """Return campaign recommendation dataset.
+
+    holiday omitted  -> fetch the next actionable holiday
+    holiday=None     -> no holiday found; use a neutral placeholder
+    holiday={...}    -> use the one supplied
+    """
+    if holiday is _UNSET:
         holiday = get_next_holiday()
 
     if holiday is None:
-        logger.warning("No upcoming holiday; using generic placeholder")
+        logger.warning(
+            "No actionable holiday available; using a neutral placeholder so "
+            "recommendations still generate"
+        )
         holiday = {
-            "holiday_name": "Upcoming Season",
+            "holiday_name": "No upcoming holiday",
             "days_until_holiday": 0,
         }
 
