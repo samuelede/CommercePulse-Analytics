@@ -8,11 +8,19 @@ logger = get_logger(__name__)
 
 
 def _read_table(table):
-    engine = get_engine()
+    """Read a staging table into a DataFrame.
+
+    Requires SQLAlchemy 2.x. pandas 2.2.x checks for the `Connectable` type,
+    which SQLAlchemy removed in 2.0, so under SQLAlchemy 1.4 pandas falls back
+    to its raw DBAPI path and fails with "'Engine' object has no attribute
+    'cursor'". See requirements-airflow.txt and the Dockerfile assertion.
+    """
     schema = config.PG_STAGING_SCHEMA
     query = f"SELECT * FROM {schema}.{table};"
     logger.info("Extracting %s.%s", schema, table)
-    df = pd.read_sql(query, engine)
+    engine = get_engine()
+    with engine.connect() as conn:
+        df = pd.read_sql(query, conn)
     logger.info("Extracted %d rows from %s", len(df), table)
     return df
 
