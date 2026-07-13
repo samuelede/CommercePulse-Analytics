@@ -82,7 +82,9 @@ services:
     <<: *airflow-common
     command: webserver
     ports:
-      - "8087:8080"
+      # Host port is configurable: 8080 is heavily contested. Override with
+      # AIRFLOW_PORT in .env if something else already holds it.
+      - "${AIRFLOW_PORT:-8080}:8080"
     restart: always
 
   airflow-scheduler:

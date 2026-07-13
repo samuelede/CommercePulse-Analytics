@@ -22,8 +22,9 @@ The pipeline moves customer data through six stages: extraction from Mandera's P
 
 ## Documentation
  
-- **[Data Dictionary](docs/DATA_DICTIONARY.md)** — every field, its type, how it is derived, and the business rules behind every classification
-- **[Live Monday CRM board](https://samuelede.monday.com/boards/5100020222)** — the activation surface, populated by the pipeline
+- **[Data Dictionary](docs/DATA_DICTIONARY.md)** - every field, its type, how it is derived, and the business rules behind every classification
+- **[Live Monday CRM board](https://samuelede.monday.com/boards/5100020222)** - the activation surface, populated by the pipeline
+  
 ## Output datasets (analytics schema)
  
 | Table | Key columns |
@@ -148,7 +149,7 @@ That is all the board setup required. The pipeline is self-configuring: on every
  
 | Column | Type | Source |
 |--------|------|--------|
-| (item name) | — | customer_name |
+| (item name) | - | customer_name |
 | Customer ID | Text | segmentation |
 | Priority | Numbers | campaign rules (1 = act now) |
 | Segment | Status | segmentation |
@@ -177,7 +178,9 @@ docker compose up -d
  
 On first start the `data-db` service auto-loads everything in `sql/`, creating the analytics schema and seeding staging with sample customers, products, and orders. The pipeline has data to work with immediately.
  
-Open the Airflow UI at http://localhost:8080 and log in with `airflow` / `airflow`.
+Open the Airflow UI at http://127.0.0.1:8080 and log in with `airflow` / `airflow`.
+ 
+If port 8080 is already taken on your machine, set `AIRFLOW_PORT` in `.env` to something free (e.g. `AIRFLOW_PORT=8087`) and use that port instead. Compose reads it, and `healthcheck.sh` picks it up automatically.
  
 The DAG appears **paused**. This is deliberate (`DAGS_ARE_PAUSED_AT_CREATION` is on), so a newly deployed DAG does not immediately start firing scheduled runs. To run it:
  
@@ -274,7 +277,7 @@ PYTHONPATH=. python scripts/check_monday.py
 docker compose ps
  
 # Webserver serving?
-curl -I http://127.0.0.1:8080/health
+curl -I http://127.0.0.1:8080/health          # or your AIRFLOW_PORT
  
 # Correct SQLAlchemy in the image?
 docker compose exec airflow-scheduler python -c "import sqlalchemy; print(sqlalchemy.__version__)"
@@ -331,12 +334,12 @@ Step 4 logs `Synced N of N items to Monday CRM`. The board will then show one it
  
 All settings come from environment variables (see `.env.example`). Key tunables:
  
-- `VIP_SPEND_THRESHOLD`, `VIP_ORDER_THRESHOLD` — VIP cutoffs
-- `RETURNING_ORDER_THRESHOLD` — minimum orders for Returning segment
-- `CHURN_DAYS_THRESHOLD` — days of inactivity before At-Risk / High churn
-- `HOLIDAY_COUNTRY`, `HOLIDAY_YEAR` — holiday lookup scope
-- `HOLIDAY_MIN_LEAD_DAYS` (default 14) — minimum days before a holiday for it to be selected
-- `HOLIDAY_NATIONWIDE_ONLY` (default true) — exclude subdivision-specific holidays
+- `VIP_SPEND_THRESHOLD`, `VIP_ORDER_THRESHOLD` - VIP cutoffs
+- `RETURNING_ORDER_THRESHOLD` - minimum orders for Returning segment
+- `CHURN_DAYS_THRESHOLD` - days of inactivity before At-Risk / High churn
+- `HOLIDAY_COUNTRY`, `HOLIDAY_YEAR` - holiday lookup scope
+- `HOLIDAY_MIN_LEAD_DAYS` (default 14) - minimum days before a holiday for it to be selected
+- `HOLIDAY_NATIONWIDE_ONLY` (default true) - exclude subdivision-specific holidays
 ### Holiday selection
  
 Campaign recommendations anchor to a single upcoming holiday, and picking the *nearest* one is not the same as picking a *useful* one. Two filters make the choice defensible:
@@ -486,3 +489,4 @@ customer's active lifespan.
 ## License
  
 Released under the [MIT License](LICENSE).
+ 

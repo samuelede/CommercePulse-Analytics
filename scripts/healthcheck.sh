@@ -47,12 +47,16 @@ fi
 
 # --------------------------------------------------------------------------
 hdr "3. Airflow webserver reachable"
-if curl -sf -o /dev/null -m 10 http://127.0.0.1:8080/health; then
-  ok "http://127.0.0.1:8080 responding"
-  curl -s -m 10 http://127.0.0.1:8080/health
+# Match whatever docker-compose published; 8080 is often already taken.
+AIRFLOW_PORT="${AIRFLOW_PORT:-$(grep -E '^AIRFLOW_PORT=' .env 2>/dev/null | cut -d= -f2)}"
+AIRFLOW_PORT="${AIRFLOW_PORT:-8080}"
+
+if curl -sf -o /dev/null -m 10 "http://127.0.0.1:${AIRFLOW_PORT}/health"; then
+  ok "http://127.0.0.1:${AIRFLOW_PORT} responding"
+  curl -s -m 10 "http://127.0.0.1:${AIRFLOW_PORT}/health"
   echo
 else
-  no "webserver not answering on 8080  ->  docker compose logs airflow-webserver --tail 50"
+  no "webserver not answering on ${AIRFLOW_PORT}  ->  docker compose logs airflow-webserver --tail 50"
 fi
 
 # --------------------------------------------------------------------------
