@@ -117,14 +117,115 @@ def test_purchase_frequency_is_a_rate_not_a_count():
     assert slow["purchase_frequency"] < 1.0   # ~4 orders over ~18 months
 
 
+HOLIDAY = {"holiday_name": "Christmas Day", "days_until_holiday": 166}
+
+
 def test_campaigns():
-    customers, _, orders = _fixtures()
+    customers, products, orders = _fixtures()
     seg = build_segmentation(customers, orders)
-    holiday = {"holiday_name": "Christmas", "days_until_holiday": 30}
-    camp = build_campaigns(seg, holiday)
+    c360 = build_customer_360(customers, products, orders)
+    camp = build_campaigns(seg, HOLIDAY, c360)
     validate_campaigns(camp)
-    vip = camp.loc[camp.customer_id == "C1", "recommended_campaign"].iloc[0]
-    assert vip == "Premium Loyalty Campaign"
+
+    assert set(camp["customer_id"]) == {"C1", "C2", "C3"}
+    assert camp["priority"].between(1, 4).all()
+    # Sorted most urgent first so a CRM can be worked top-down.
+    assert camp["priority"].is_monotonic_increasing
+
+
+def test_customer_360_changes_the_recommendation():
+    """Two customers identical on segment but different on value must not get
+    the same campaign. This is the whole reason Customer 360 feeds the rules."""
+    import pandas as pd
+
+    from python.enrich.campaigns import build_campaigns
+
+    seg = pd.DataFrame(
+        {
+            "customer_id": ["WHALE", "MINNOW"],
+            "segment": ["At-Risk Customer", "At-Risk Customer"],
+        }
+    )
+    c360 = pd.DataFrame(
+        {
+            "customer_id": ["WHALE", "MINNOW"],
+            "churn_risk": ["High", "High"],
+            "lifetime_value": [14400.0, 90.0],
+        }
+    )
+
+    camp = build_campaigns(seg, HOLIDAY, c360).set_index("customer_id")
+
+    # Same segment, same churn risk, very different worth.
+    assert (
+        camp.loc["WHALE", "recommended_campaign"]
+        != camp.loc["MINNOW", "recommended_campaign"]
+    )
+    assert camp.loc["WHALE", "recommended_campaign"] == "Premium Win-Back Campaign"
+    assert camp.loc["MINNOW", "recommended_campaign"] == "Win-Back Campaign"
+
+
+def test_churn_risk_escalates_priority():
+    """A VIP slipping away outranks a healthy VIP."""
+    import pandas as pd
+
+    from python.enrich.campaigns import build_campaigns
+
+    seg = pd.DataFrame(
+        {
+            "customer_id": ["LAPSING", "HEALTHY"],
+            "segment": ["VIP Customer", "VIP Customer"],
+        }
+    )
+    c360 = pd.DataFrame(
+        {
+            "customer_id": ["LAPSING", "HEALTHY"],
+            "churn_risk": ["High", "Low"],
+            "lifetime_value": [8000.0, 8000.0],
+        }
+    )
+
+    camp = build_campaigns(seg, HOLIDAY, c360).set_index("customer_id")
+
+    assert camp.loc["LAPSING", "priority"] < camp.loc["HEALTHY", "priority"]
+    assert camp.loc["LAPSING", "recommended_campaign"] == "Premium Win-Back Campaign"
+    assert camp.loc["HEALTHY", "recommended_campaign"] == "Premium Loyalty Campaign"
+
+
+def test_high_value_returning_customer_is_promoted():
+    """Someone spending like a VIP should be treated like one before a
+    competitor notices."""
+    import pandas as pd
+
+    from python.enrich.campaigns import build_campaigns
+
+    seg = pd.DataFrame(
+        {"customer_id": ["RISING"], "segment": ["Returning Customer"]}
+    )
+    c360 = pd.DataFrame(
+        {
+            "customer_id": ["RISING"],
+            "churn_risk": ["Low"],
+            "lifetime_value": [4000.0],  # 80% of the 5000 VIP threshold
+        }
+    )
+
+    camp = build_campaigns(seg, HOLIDAY, c360)
+    assert camp.iloc[0]["recommended_campaign"] == "VIP Upgrade Offer"
+
+
+def test_campaigns_degrade_without_customer_360():
+    """Customer 360 is optional; the engine must still produce valid output."""
+    import pandas as pd
+
+    from python.enrich.campaigns import build_campaigns
+
+    seg = pd.DataFrame(
+        {"customer_id": ["C1"], "segment": ["VIP Customer"]}
+    )
+    camp = build_campaigns(seg, HOLIDAY, customer_360=None)
+    validate_campaigns(camp)
+    assert camp.iloc[0]["recommended_campaign"] == "Premium Loyalty Campaign"
 
 
 def test_value_for_column_types():
@@ -157,6 +258,7 @@ def test_column_plan_covers_payload():
         "lifetime_value",
         "total_orders",
         "purchase_frequency",
+        "priority",
     }
     assert required == set(COLUMN_PLAN)
     # Status columns must be the two categorical fields
@@ -186,6 +288,7 @@ def test_ensure_columns_rejects_type_mismatch():
         {"id": "text_7", "title": "Customer ID", "type": "text"},
         {"id": "num_8", "title": "Total Orders", "type": "numbers"},
         {"id": "num_9", "title": "Orders / Month", "type": "numbers"},
+        {"id": "num_10", "title": "Priority", "type": "numbers"},
     ]
 
     with patch.object(m.config, "MONDAY_API_TOKEN", "x"), patch.object(
@@ -212,6 +315,7 @@ def test_ensure_columns_accepts_correct_board():
         {"id": "text_7", "title": "Customer ID", "type": "text"},
         {"id": "num_8", "title": "Total Orders", "type": "numbers"},
         {"id": "num_9", "title": "Orders / Month", "type": "numbers"},
+        {"id": "num_10", "title": "Priority", "type": "numbers"},
     ]
 
     with patch.object(m.config, "MONDAY_API_TOKEN", "x"), patch.object(
@@ -223,8 +327,8 @@ def test_ensure_columns_accepts_correct_board():
 
     assert cols["Segment"] == "status_1"
     assert cols["Churn Risk"] == "status_5"
-    assert cols["Total Orders"] == "num_8"
-    assert len(cols) == 9
+    assert cols["Priority"] == "num_10"
+    assert len(cols) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -316,3 +420,4 @@ def test_campaigns_handle_no_holiday_found():
     assert len(camp) == 1
     assert camp.iloc[0]["recommended_campaign"] == "Premium Loyalty Campaign"
     assert camp["holiday_name"].notna().all()
+    assert camp.iloc[0]["holiday_name"] == "No upcoming holiday"

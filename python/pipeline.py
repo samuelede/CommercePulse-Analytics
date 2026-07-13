@@ -44,7 +44,7 @@ def run(skip_crm=False):
     load_customer_360(c360)
 
     holiday = get_next_holiday()
-    campaigns = build_campaigns(segmentation, holiday)
+    campaigns = build_campaigns(segmentation, holiday, c360)
     validate_campaigns(campaigns)
     load_campaigns(campaigns)
 

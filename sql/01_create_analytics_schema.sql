@@ -24,7 +24,10 @@ CREATE TABLE IF NOT EXISTS analytics.customer_360 (
 CREATE TABLE IF NOT EXISTS analytics.campaign_recommendations (
     customer_id          TEXT,
     segment              TEXT,
+    churn_risk           TEXT,
+    lifetime_value       NUMERIC(12, 2),
     holiday_name         TEXT,
     days_until_holiday   INTEGER,
-    recommended_campaign TEXT
+    recommended_campaign TEXT,
+    priority             INTEGER          -- 1 = act now, 4 = routine
 );

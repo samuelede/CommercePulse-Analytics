@@ -62,8 +62,9 @@ def _campaigns(**ctx):
     import pandas as pd
 
     seg = pd.read_json(ctx["ti"].xcom_pull(key="segmentation"), orient="split")
+    c360 = pd.read_json(ctx["ti"].xcom_pull(key="customer_360"), orient="split")
     holiday = get_next_holiday()
-    camp = build_campaigns(seg, holiday)
+    camp = build_campaigns(seg, holiday, c360)
     validate_campaigns(camp)
     load_campaigns(camp)
     ctx["ti"].xcom_push(key="campaigns", value=camp.to_json(orient="split"))
@@ -100,6 +101,8 @@ with DAG(
         task_id="reverse_etl_monday", python_callable=_reverse_etl
     )
 
+    # build_campaigns now consumes Customer 360 (churn risk, lifetime value),
+    # not just segmentation, so it must wait for both.
     extract >> [segment, c360]
-    segment >> campaigns
+    [segment, c360] >> campaigns
     [campaigns, c360] >> reverse_etl
