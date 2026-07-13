@@ -34,6 +34,7 @@ RATE_LIMIT_SLEEP = 0.4  # Monday throttles aggressive writes
 # colour-coded for business users. The item name carries the customer name.
 COLUMN_PLAN = {
     "customer_id":          ("Customer ID",          "text"),
+    "priority":             ("Priority",             "numbers"),
     "segment":              ("Segment",              "status"),
     "recommended_campaign": ("Recommended Campaign", "text"),
     "holiday_name":         ("Holiday",              "text"),
@@ -199,14 +200,20 @@ def sync_campaigns(campaigns, customer_360=None, segmentation=None):
         cid = row["customer_id"]
         meta = c360.get(cid, {})
 
+        # churn_risk and lifetime_value now ride on the campaigns row itself
+        # (the rule engine consumes them), so prefer those and fall back to the
+        # Customer 360 lookup only for fields campaigns does not carry.
         record = {
             "customer_id": cid,
+            "priority": row.get("priority"),
             "segment": row["segment"],
             "recommended_campaign": row["recommended_campaign"],
             "holiday_name": row["holiday_name"],
             "days_until_holiday": row["days_until_holiday"],
-            "churn_risk": meta.get("churn_risk"),
-            "lifetime_value": meta.get("lifetime_value"),
+            "churn_risk": row.get("churn_risk", meta.get("churn_risk")),
+            "lifetime_value": row.get(
+                "lifetime_value", meta.get("lifetime_value")
+            ),
             "total_orders": meta.get("total_orders"),
             "purchase_frequency": meta.get("purchase_frequency"),
         }

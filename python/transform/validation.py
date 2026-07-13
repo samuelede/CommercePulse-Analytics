@@ -53,6 +53,20 @@ def validate_customer_360(df):
 def validate_campaigns(df):
     if df.empty:
         raise ValidationError("Campaign dataset is empty")
+    if df["customer_id"].duplicated().any():
+        raise ValidationError("Duplicate customer_id in campaigns")
     if df["recommended_campaign"].isnull().any():
         raise ValidationError("Null recommended_campaign values")
+    if df["priority"].isnull().any():
+        raise ValidationError("Null priority values")
+    if not df["priority"].between(1, 4).all():
+        raise ValidationError("priority outside the expected 1-4 range")
+    # An urgent campaign must never be handed to a healthy, low-risk customer:
+    # that would mean the churn signal is not reaching the rule engine.
+    urgent_low_risk = df[(df["priority"] == 1) & (df["churn_risk"] == "Low")]
+    if not urgent_low_risk.empty:
+        raise ValidationError(
+            "Priority 1 assigned to Low churn_risk customers; "
+            "Customer 360 signal is not reaching the campaign rules"
+        )
     logger.info("Campaign validation passed")
