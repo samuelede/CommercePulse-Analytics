@@ -1,15 +1,25 @@
 # Installed on top of apache/airflow:2.9.3-python3.11.
 #
-# SQLAlchemy MUST be 2.x here. pandas 2.2.x checks for the SQLAlchemy
-# `Connectable` type, which was removed in SQLAlchemy 2.0. Under the 1.4 that
-# Airflow's constraint file pins, that check fails, pandas silently falls back
-# to its raw-DBAPI path, and every read_sql/to_sql dies with
-#   AttributeError: 'Engine' object has no attribute 'cursor'
-# Airflow 2.9.3 runs correctly on SQLAlchemy 2.x despite the conservative pin.
-SQLAlchemy>=2.0.30,<2.1
-
-# numpy < 2 for binary compatibility with pandas 2.2.2.
-pandas==2.2.2
+# DEPENDENCY CONSTRAINT, read before changing anything here:
+#
+#   Airflow 2.9.3 REQUIRES SQLAlchemy 1.4. Its ORM models (TaskInstance,
+#   DagModel) use legacy annotations without Mapped[], which SQLAlchemy 2.x
+#   rejects outright:
+#       sqlalchemy.orm.exc.MappedAnnotationError: Type annotation for
+#       "TaskInstance.dag_model" can't be correctly interpreted
+#   The webserver crash-loops on startup. The pin in Airflow's constraint file
+#   is a hard requirement, not conservatism.
+#
+#   pandas 2.2.x REQUIRES SQLAlchemy 2.x. It checks for the `Connectable` type
+#   that SQLAlchemy removed in 2.0, so under 1.4 it silently degrades to a raw
+#   DBAPI path and every read_sql/to_sql dies with:
+#       AttributeError: 'Engine' object has no attribute 'cursor'
+#
+#   These two cannot both be satisfied. pandas 2.1.4 is the newest release that
+#   works correctly with SQLAlchemy 1.4, so pandas moves and SQLAlchemy stays.
+#
+# Do NOT pin SQLAlchemy here. Let Airflow's own constraint resolve it to 1.4.
+pandas==2.1.4
 numpy==1.26.4
 requests
 python-dotenv

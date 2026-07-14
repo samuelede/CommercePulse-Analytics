@@ -336,21 +336,39 @@ def test_ensure_columns_accepts_correct_board():
 # ---------------------------------------------------------------------------
 
 def _fake_nager_rows(year):
-    """Realistic Nager.Date GB payload: a mix of regional and nationwide."""
-    by_year = {
-        2026: [
-            ("Battle of the Boyne", f"{year}-07-13", False),   # NI only
-            ("Scottish Summer Bank Holiday", f"{year}-08-03", False),  # Scotland
-            ("Summer Bank Holiday", f"{year}-08-31", True),
-            ("St Andrew's Day", f"{year}-11-30", False),       # Scotland
-            ("Christmas Day", f"{year}-12-25", True),
+    """Realistic Nager.Date GB payload: a mix of regional and nationwide.
+
+    Dates are built RELATIVE TO TODAY, not hardcoded. A fixture pinned to a
+    fixed calendar silently rots: once the real date passes the pinned one, the
+    "nearest upcoming holiday" changes and the test fails for reasons that have
+    nothing to do with the code.
+    """
+    import datetime
+
+    today = datetime.date.today()
+
+    # Only the requested year's rows are returned, mirroring the real API.
+    offsets = {
+        # (name, days from today, nationwide)
+        year: [
+            ("Imminent Regional Holiday", 1, False),    # tomorrow, regional
+            ("Imminent National Holiday", 3, True),     # in 3 days, nationwide
+            ("Regional Holiday", 30, False),            # 30 days out, regional
+            ("Summer Bank Holiday", 50, True),          # 50 days out, nationwide
+            ("Christmas Day", 120, True),               # far out, nationwide
         ],
-        2027: [("New Year's Day", "2027-01-01", True)],
     }
-    return [
-        {"holiday_name": n, "holiday_date": d, "nationwide": w}
-        for n, d, w in by_year.get(year, [])
-    ]
+
+    rows = []
+    for name, days, nationwide in offsets.get(year, []):
+        rows.append(
+            {
+                "holiday_name": name,
+                "holiday_date": (today + datetime.timedelta(days=days)).isoformat(),
+                "nationwide": nationwide,
+            }
+        )
+    return rows
 
 
 def test_regional_holidays_are_excluded():
@@ -362,12 +380,19 @@ def test_regional_holidays_are_excluded():
     with patch.object(h, "_fetch_nager", side_effect=_fake_nager_rows), patch.object(
         h.config, "HOLIDAY_API_KEY", ""
     ):
-        df = h.get_holidays(nationwide_only=True, min_lead_days=0)
+        loose = h.get_holidays(nationwide_only=False, min_lead_days=0)
+        strict = h.get_holidays(nationwide_only=True, min_lead_days=0)
 
-    names = set(df["holiday_name"])
-    assert "Battle of the Boyne" not in names
-    assert "St Andrew's Day" not in names
-    assert df["nationwide"].all()
+    # The regional dates are present when the filter is off...
+    assert "Imminent Regional Holiday" in set(loose["holiday_name"])
+    assert "Regional Holiday" in set(loose["holiday_name"])
+
+    # ...and gone when it is on.
+    names = set(strict["holiday_name"])
+    assert "Imminent Regional Holiday" not in names
+    assert "Regional Holiday" not in names
+    assert strict["nationwide"].all()
+    assert len(strict) < len(loose)
 
 
 def test_min_lead_days_excludes_imminent_holidays():
@@ -379,19 +404,24 @@ def test_min_lead_days_excludes_imminent_holidays():
     with patch.object(h, "_fetch_nager", side_effect=_fake_nager_rows), patch.object(
         h.config, "HOLIDAY_API_KEY", ""
     ):
-        # No lead-time floor: the imminent regional date is the nearest.
+        # No lead-time floor: the nearest date wins, however imminent.
         loose = h.get_holidays(nationwide_only=False, min_lead_days=0)
-        assert loose.iloc[0]["holiday_name"] == "Battle of the Boyne"
         assert loose.iloc[0]["days_until_holiday"] < 14
+        assert "Imminent" in loose.iloc[0]["holiday_name"]
 
         # With a floor, nothing inside the window survives.
         strict = h.get_holidays(nationwide_only=False, min_lead_days=14)
         assert (strict["days_until_holiday"] >= 14).all()
-        assert "Battle of the Boyne" not in set(strict["holiday_name"])
+        assert not any("Imminent" in n for n in strict["holiday_name"])
 
 
 def test_get_next_holiday_is_actionable():
-    """Both filters together must yield a nationwide, plannable holiday."""
+    """Both filters together must yield a nationwide, plannable holiday.
+
+    The fixture deliberately offers nearer alternatives that fail one filter
+    each: an imminent regional date, an imminent national one, and a regional
+    date 30 days out. The only date clearing both filters is 50 days away.
+    """
     from unittest.mock import patch
 
     import python.enrich.holiday_api as h

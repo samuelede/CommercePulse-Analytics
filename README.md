@@ -7,7 +7,7 @@
 [![pandas](https://img.shields.io/badge/pandas-2.2.2-150458.svg?logo=pandas&logoColor=white)](https://pandas.pydata.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED.svg?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 [![Monday.com](https://img.shields.io/badge/Monday.com-GraphQL%20API-FF3D57.svg?logo=mondaydotcom&logoColor=white)](https://developer.monday.com/api-reference/)
-[![Tests](https://img.shields.io/badge/tests-16%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-18%20passing-brightgreen.svg)](tests/)
 [![Reverse ETL](https://img.shields.io/badge/pattern-Reverse%20ETL-6A1B9A.svg)]()
 
 Customer intelligence and Reverse ETL platform built on the Mandera Analytics commerce data. CommercePulse extracts customer, product, and order data from PostgreSQL staging, builds customer segmentation and a Customer 360 view, enriches recommendations with public holiday data, and pushes the results into Monday CRM so marketing, sales, and customer success teams can act on them directly.
@@ -150,7 +150,7 @@ That is all the board setup required. The pipeline is self-configuring: on every
  
 | Column | Type | Source |
 |--------|------|--------|
-| (item name) | - | customer_name |
+| (item name) | — | customer_name |
 | Customer ID | Text | segmentation |
 | Priority | Numbers | campaign rules (1 = act now) |
 | Segment | Status | segmentation |
@@ -263,7 +263,9 @@ Run the health check. It validates each layer independently, so a failure tells 
 bash scripts/healthcheck.sh
 ```
  
-It checks container status, the SQLAlchemy version inside the image, webserver reachability, staging data, analytics outputs, and Monday credentials.
+It checks container status, waits for the stack to become ready, then verifies the SQLAlchemy version inside the image, webserver reachability, staging data, analytics outputs, and Monday credentials.
+ 
+The readiness wait matters. Airflow takes 30 to 60 seconds to start serving after its containers report as running, so a check fired immediately after `docker compose up -d` will fail on everything downstream and send you chasing problems that do not exist. The script polls for up to 90 seconds before declaring anything broken. Pass `--no-wait` to skip the poll.
  
 To check just the Monday connection:
  
@@ -345,12 +347,12 @@ python -m python.pipeline                                  # repopulate cleanly
  
 All settings come from environment variables (see `.env.example`). Key tunables:
  
-- `VIP_SPEND_THRESHOLD`, `VIP_ORDER_THRESHOLD` - VIP cutoffs
-- `RETURNING_ORDER_THRESHOLD` - minimum orders for Returning segment
-- `CHURN_DAYS_THRESHOLD` - days of inactivity before At-Risk / High churn
-- `HOLIDAY_COUNTRY`, `HOLIDAY_YEAR` - holiday lookup scope
-- `HOLIDAY_MIN_LEAD_DAYS` (default 14) - minimum days before a holiday for it to be selected
-- `HOLIDAY_NATIONWIDE_ONLY` (default true) - exclude subdivision-specific holidays
+- `VIP_SPEND_THRESHOLD`, `VIP_ORDER_THRESHOLD` — VIP cutoffs
+- `RETURNING_ORDER_THRESHOLD` — minimum orders for Returning segment
+- `CHURN_DAYS_THRESHOLD` — days of inactivity before At-Risk / High churn
+- `HOLIDAY_COUNTRY`, `HOLIDAY_YEAR` — holiday lookup scope
+- `HOLIDAY_MIN_LEAD_DAYS` (default 14) — minimum days before a holiday for it to be selected
+- `HOLIDAY_NATIONWIDE_ONLY` (default true) — exclude subdivision-specific holidays
 ### Holiday selection
  
 Campaign recommendations anchor to a single upcoming holiday, and picking the *nearest* one is not the same as picking a *useful* one. Two filters make the choice defensible:
@@ -367,9 +369,13 @@ The lookup spans `HOLIDAY_YEAR` and the following year, so a run in December sti
  
 **`AttributeError: 'Engine' object has no attribute 'cursor'` in an Airflow task**
  
-SQLAlchemy 1.4 is installed in the image. pandas 2.2.x checks for the SQLAlchemy `Connectable` type, which was removed in 2.0, so under 1.4 the check fails, pandas falls back to its raw DBAPI path, and every `read_sql`/`to_sql` breaks with this misleading error.
+pandas 2.2.x is installed. It needs SQLAlchemy 2.x, which Airflow cannot use. Pin pandas to 2.1.4 and rebuild.
  
-Airflow's constraint file pins SQLAlchemy 1.4, so the image must override it. `requirements-airflow.txt` pins `SQLAlchemy>=2.0.30`, and the Dockerfile asserts the version at build time. If you hit this, the image is stale:
+**`MappedAnnotationError: Type annotation for "TaskInstance.dag_model"` and the webserver crash-loops**
+ 
+SQLAlchemy 2.x is installed. Airflow 2.9's ORM models require 1.4. Do not pin SQLAlchemy in `requirements-airflow.txt`; let Airflow's own constraint resolve it.
+ 
+Both errors are two faces of the same collision, and the Dockerfile now asserts against both. If you hit either, the image is stale:
  
 ```bash
 docker compose down
@@ -377,13 +383,13 @@ docker compose build --no-cache
 docker compose up -d
 ```
  
-Confirm the version inside the container:
+Confirm both versions inside the container:
  
 ```bash
-docker compose exec airflow-scheduler python -c "import sqlalchemy; print(sqlalchemy.__version__)"
+docker compose exec airflow-scheduler python -c "import sqlalchemy, pandas; print(sqlalchemy.__version__, pandas.__version__)"
 ```
  
-Anything below 2.0 means the rebuild did not take.
+Expect SQLAlchemy `1.4.x` and pandas `2.1.4`.
  
 **`could not translate host name "postgres" to address` / `connection refused`**
  
@@ -448,7 +454,10 @@ A name and email confirms the token works. Column IDs are resolved automatically
  
 - PostgreSQL is mapped to host port 5434 to avoid clashing with the Mandera stack (5433).
 - pandas is pinned to 2.2.2 and numpy to 1.26.4. numpy is deliberately held below 2.x: pandas 2.2.2 predates the numpy 2.0 ABI break, and pairing it with numpy 2.x can raise `numpy.dtype size changed` at import.
-- SQLAlchemy must be **2.x** in both the venv and the Airflow image. pandas 2.2.x requires it: pandas checks for the `Connectable` type that SQLAlchemy removed in 2.0, and under 1.4 it silently degrades to a raw DBAPI path that fails on every query. Airflow 2.9.3's constraint file pins 1.4, so `requirements-airflow.txt` deliberately overrides it and the Dockerfile asserts the result at build time.
+- **SQLAlchemy must stay at 1.4, and pandas below 2.2.** These two constraints collide and the window between them is narrow:
+  - Airflow 2.9.3 *requires* SQLAlchemy 1.4. Its ORM models use legacy annotations without `Mapped[]`, which SQLAlchemy 2.x rejects (`MappedAnnotationError` on `TaskInstance`), and the webserver crash-loops on startup.
+  - pandas 2.2.x *requires* SQLAlchemy 2.x. It checks for the `Connectable` type removed in 2.0, and under 1.4 it degrades to a raw DBAPI path where every query fails with `'Engine' object has no attribute 'cursor'`.
+  - pandas 2.1.4 is the newest release that works with SQLAlchemy 1.4, so **pandas moves and SQLAlchemy stays**. The Dockerfile asserts both bounds at build time, and `db.py` raises at import if the pair ever drifts.
 - There is no pyarrow dependency. The pipeline reads and writes exclusively through SQLAlchemy/psycopg2 and never touches Parquet or Arrow.
 - The Holiday connector uses Calendarific when a key is set and falls back to the keyless Nager.Date API otherwise.
 ## Contributing
@@ -500,4 +509,3 @@ customer's active lifespan.
 ## License
  
 Released under the [MIT License](LICENSE).
- 
