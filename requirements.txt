@@ -1,10 +1,16 @@
-# Python 3.11 (matches the apache/airflow:2.9.3-python3.11 base image).
-# numpy held below 2.x for binary compatibility with pandas 2.2.2.
-pandas==2.2.2
+# Python 3.11, matching the apache/airflow:2.9.3-python3.11 base image.
+#
+# Deliberately mirrors the Airflow image (see requirements-airflow.txt).
+# pandas is held below 2.2 because Airflow 2.9 requires SQLAlchemy 1.4, and
+# pandas 2.2.x cannot work with it. Keeping the venv and the container on the
+# same pair means a DAG cannot behave differently from `python -m python.pipeline`.
+#
+# numpy held below 2.x for binary compatibility with pandas 2.1.x.
+pandas==2.1.4
 numpy==1.26.4
+SQLAlchemy==1.4.52
 requests==2.32.3
 python-dotenv==1.0.1
-SQLAlchemy==2.0.30
 psycopg2-binary==2.9.9
 
 # Dev / test
