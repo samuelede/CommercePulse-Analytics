@@ -421,3 +421,158 @@ def test_campaigns_handle_no_holiday_found():
     assert camp.iloc[0]["recommended_campaign"] == "Premium Loyalty Campaign"
     assert camp["holiday_name"].notna().all()
     assert camp.iloc[0]["holiday_name"] == "No upcoming holiday"
+
+
+# ---------------------------------------------------------------------------
+# Reverse ETL upsert
+# ---------------------------------------------------------------------------
+
+def _board_columns():
+    return {
+        "Customer ID": "text_cid",
+        "Priority": "num_pri",
+        "Segment": "status_seg",
+        "Recommended Campaign": "text_camp",
+        "Holiday": "text_hol",
+        "Days Until Holiday": "num_days",
+        "Churn Risk": "status_churn",
+        "Lifetime Value": "num_ltv",
+        "Total Orders": "num_ord",
+        "Orders / Month": "num_freq",
+    }
+
+
+def _sync_fixtures():
+    import pandas as pd
+
+    campaigns = pd.DataFrame(
+        {
+            "customer_id": ["C001", "C004"],
+            "segment": ["Returning Customer", "At-Risk Customer"],
+            "churn_risk": ["Low", "High"],
+            "lifetime_value": [2600.0, 90.0],
+            "holiday_name": ["Christmas Day", "Christmas Day"],
+            "days_until_holiday": [165, 165],
+            "recommended_campaign": [
+                "Seasonal Discount Campaign",
+                "Win-Back Campaign",
+            ],
+            "priority": [3, 1],
+        }
+    )
+    c360 = pd.DataFrame(
+        {
+            "customer_id": ["C001", "C004"],
+            "total_orders": [3, 1],
+            "purchase_frequency": [3.0, 0.17],
+            "churn_risk": ["Low", "High"],
+            "lifetime_value": [2600.0, 90.0],
+        }
+    )
+    seg = pd.DataFrame(
+        {"customer_id": ["C001", "C004"], "customer_name": ["Ada", "Edsger"]}
+    )
+    return campaigns, c360, seg
+
+
+def test_repeated_sync_updates_rather_than_duplicates():
+    """Reverse ETL is an upsert. Running the pipeline twice must not stack a
+    second copy of every customer onto the board."""
+    import json
+    from unittest.mock import patch
+
+    import python.load.monday_crm as m
+
+    campaigns, c360, seg = _sync_fixtures()
+
+    board = {}          # item_id -> customer_id
+    counts = {"create": 0, "update": 0}
+    next_id = [1000]
+
+    def fake_request(query, variables=None):
+        if "items_page" in query:
+            items = [
+                {
+                    "id": iid,
+                    "name": "x",
+                    "column_values": [{"id": "text_cid", "text": cid}],
+                }
+                for iid, cid in board.items()
+            ]
+            return {"boards": [{"items_page": {"cursor": None, "items": items}}]}
+        if "create_item" in query:
+            counts["create"] += 1
+            cid = json.loads(variables["cols"])["text_cid"]
+            next_id[0] += 1
+            board[str(next_id[0])] = cid
+            return {"create_item": {"id": str(next_id[0]), "name": "x"}}
+        if "change_multiple_column_values" in query:
+            counts["update"] += 1
+            return {"change_multiple_column_values": {"id": variables["item"]}}
+        return {}
+
+    with patch.object(m.config, "MONDAY_API_TOKEN", "x"), patch.object(
+        m.config, "MONDAY_BOARD_ID", "123"
+    ), patch.object(m, "monday_request", side_effect=fake_request), patch.object(
+        m, "ensure_columns", return_value=_board_columns()
+    ), patch.object(m.time, "sleep"):
+
+        m.sync_campaigns(campaigns, c360, seg)
+        assert len(board) == 2
+        assert counts["create"] == 2
+        assert counts["update"] == 0
+
+        # Second run: same customers, nothing new should be created.
+        m.sync_campaigns(campaigns, c360, seg)
+
+    assert len(board) == 2, "second run duplicated the board items"
+    assert counts["create"] == 2, "second run created items instead of updating"
+    assert counts["update"] == 2, "second run did not update in place"
+
+
+def test_sync_creates_only_genuinely_new_customers():
+    """A customer not yet on the board is created; existing ones are updated."""
+    import json
+    from unittest.mock import patch
+
+    import pandas as pd
+
+    import python.load.monday_crm as m
+
+    campaigns, c360, seg = _sync_fixtures()
+
+    board = {"999": "C001"}   # C001 already on the board, C004 is not
+    counts = {"create": 0, "update": 0}
+
+    def fake_request(query, variables=None):
+        if "items_page" in query:
+            items = [
+                {
+                    "id": iid,
+                    "name": "x",
+                    "column_values": [{"id": "text_cid", "text": cid}],
+                }
+                for iid, cid in board.items()
+            ]
+            return {"boards": [{"items_page": {"cursor": None, "items": items}}]}
+        if "create_item" in query:
+            counts["create"] += 1
+            cid = json.loads(variables["cols"])["text_cid"]
+            board["1001"] = cid
+            return {"create_item": {"id": "1001", "name": "x"}}
+        if "change_multiple_column_values" in query:
+            counts["update"] += 1
+            return {"change_multiple_column_values": {"id": variables["item"]}}
+        return {}
+
+    with patch.object(m.config, "MONDAY_API_TOKEN", "x"), patch.object(
+        m.config, "MONDAY_BOARD_ID", "123"
+    ), patch.object(m, "monday_request", side_effect=fake_request), patch.object(
+        m, "ensure_columns", return_value=_board_columns()
+    ), patch.object(m.time, "sleep"):
+
+        m.sync_campaigns(campaigns, c360, seg)
+
+    assert counts["create"] == 1, "should create only the new customer"
+    assert counts["update"] == 1, "should update the existing customer"
+    assert sorted(board.values()) == ["C001", "C004"]
