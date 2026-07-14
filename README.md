@@ -86,7 +86,8 @@ commercepulse/
 │   └── 02_seed_sample_data.sql     # Optional local test data
 ├── scripts/
 │   ├── healthcheck.sh              # Validate every layer of the stack
-│   └── check_monday.py             # Verify Monday token and board
+│   ├── check_monday.py             # Verify Monday token and board
+│   └── clear_monday_board.py       # One-off: wipe the board
 ├── tests/test_pipeline.py
 ├── requirements.txt
 ├── requirements-airflow.txt
@@ -328,7 +329,17 @@ PYTHONPATH=. python scripts/check_monday.py
 python -m python.pipeline
 ```
  
-Step 4 logs `Synced N of N items to Monday CRM`. The board will then show one item per customer, titled with the customer name, with Segment and Churn Risk as colour-coded status columns.
+Step 4 logs `Synced N of N items (X created, Y updated, Z failed)`. The board shows one item per customer, titled with the customer name, with Segment and Churn Risk as colour-coded status columns.
+ 
+The sync is an **upsert**: a customer already on the board is updated in place, matched on the Customer ID column. Only genuinely new customers create items, so running the pipeline repeatedly keeps the board correct rather than stacking a fresh copy of every customer on each run.
+ 
+If an earlier append-only run left duplicates on your board, clear it once:
+ 
+```bash
+PYTHONPATH=. python scripts/clear_monday_board.py          # dry run, lists what would go
+PYTHONPATH=. python scripts/clear_monday_board.py --yes    # delete
+python -m python.pipeline                                  # repopulate cleanly
+```
  
 ## Configuration reference
  

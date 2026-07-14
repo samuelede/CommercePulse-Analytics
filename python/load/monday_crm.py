@@ -159,19 +159,86 @@ def value_for_column(col_type, raw_value):
     return str(raw_value)
 
 
-def sync_campaigns(campaigns, customer_360=None, segmentation=None):
-    """Publish campaign recommendations to the configured Monday board.
+def fetch_existing_items(customer_id_column):
+    """Return {customer_id: monday_item_id} for everything already on the board.
 
-    campaigns     : customer_id, segment, holiday_name, days_until_holiday,
-                    recommended_campaign
-    customer_360  : optional, supplies churn_risk and lifetime_value
-    segmentation  : optional, supplies customer_name for the item title
+    Reverse ETL is an upsert: a customer already on the board must be updated
+    in place, not appended again. Matching is on the Customer ID column rather
+    than the item name, since the customer id is the stable business key and
+    names are not guaranteed unique.
+
+    Paginated: boards outgrow a single page quickly.
+    """
+    query = """
+    query ($board: ID!, $cursor: String) {
+      boards (ids: [$board]) {
+        items_page (limit: 100, cursor: $cursor) {
+          cursor
+          items {
+            id
+            name
+            column_values (ids: [$colId]) { id text }
+          }
+        }
+      }
+    }
+    """
+    # column_values takes the id list as a variable; inline it since Monday's
+    # schema wants [String!] here and mixing it with the cursor is fiddly.
+    query = query.replace("$colId", f'"{customer_id_column}"')
+
+    existing = {}
+    cursor = None
+
+    while True:
+        data = monday_request(
+            query, {"board": str(config.MONDAY_BOARD_ID), "cursor": cursor}
+        )
+        boards = data.get("boards") or []
+        if not boards:
+            break
+
+        page = boards[0]["items_page"]
+        for item in page["items"]:
+            cid = None
+            for col in item.get("column_values", []):
+                if col["id"] == customer_id_column:
+                    cid = (col.get("text") or "").strip()
+            if cid:
+                existing[cid] = item["id"]
+
+        cursor = page.get("cursor")
+        if not cursor:
+            break
+
+    logger.info("Board already holds %d item(s)", len(existing))
+    return existing
+
+
+def sync_campaigns(campaigns, customer_360=None, segmentation=None):
+    """Upsert campaign recommendations onto the configured Monday board.
+
+    This is an upsert, not an append. A customer already on the board is
+    updated in place; only genuinely new customers create items. Blindly
+    calling create_item on every run stacks a fresh copy of every customer on
+    top of the last, which is not a sync but an append log: the board fills
+    with contradictory duplicates and nobody can trust any row.
+
+    Matching is on the Customer ID column, the stable business key.
+
+    campaigns     : customer_id, segment, churn_risk, lifetime_value,
+                    holiday_name, days_until_holiday, recommended_campaign,
+                    priority
+    customer_360  : optional; supplies total_orders and purchase_frequency
+    segmentation  : optional; supplies customer_name for the item title
     """
     if not config.MONDAY_API_TOKEN or not config.MONDAY_BOARD_ID:
         logger.error("MONDAY_API_TOKEN or MONDAY_BOARD_ID missing; skipping sync")
         return 0
 
     title_to_id = ensure_columns()
+    cid_column = title_to_id[COLUMN_PLAN["customer_id"][0]]
+    existing = fetch_existing_items(cid_column)
 
     c360 = (
         customer_360.set_index("customer_id").to_dict("index")
@@ -195,13 +262,25 @@ def sync_campaigns(campaigns, customer_360=None, segmentation=None):
     }
     """
 
-    pushed = 0
+    update_item = """
+    mutation ($board: ID!, $item: ID!, $cols: JSON!) {
+      change_multiple_column_values (
+        board_id: $board,
+        item_id: $item,
+        column_values: $cols,
+        create_labels_if_missing: true
+      ) { id name }
+    }
+    """
+
+    created = updated = failed = 0
+
     for _, row in campaigns.iterrows():
-        cid = row["customer_id"]
+        cid = str(row["customer_id"])
         meta = c360.get(cid, {})
 
-        # churn_risk and lifetime_value now ride on the campaigns row itself
-        # (the rule engine consumes them), so prefer those and fall back to the
+        # churn_risk and lifetime_value ride on the campaigns row itself (the
+        # rule engine consumes them), so prefer those and fall back to the
         # Customer 360 lookup only for fields campaigns does not carry.
         record = {
             "customer_id": cid,
@@ -224,34 +303,55 @@ def sync_campaigns(campaigns, customer_360=None, segmentation=None):
                 col_type, record[field]
             )
 
-        # Prefer a human-readable item title; fall back to the id.
         item_name = str(names.get(cid, cid))
+        item_id = existing.get(cid)
 
         try:
-            monday_request(
-                create_item,
-                {
-                    "board": str(config.MONDAY_BOARD_ID),
-                    "name": item_name,
-                    # column_values must be a JSON *string*
-                    "cols": json.dumps(column_values),
-                },
-            )
-            pushed += 1
+            if item_id:
+                monday_request(
+                    update_item,
+                    {
+                        "board": str(config.MONDAY_BOARD_ID),
+                        "item": str(item_id),
+                        # column_values must be a JSON *string*
+                        "cols": json.dumps(column_values),
+                    },
+                )
+                updated += 1
+            else:
+                monday_request(
+                    create_item,
+                    {
+                        "board": str(config.MONDAY_BOARD_ID),
+                        "name": item_name,
+                        "cols": json.dumps(column_values),
+                    },
+                )
+                created += 1
         except RuntimeError as exc:
-            # A schema-level error (bad column type, bad value shape) will fail
-            # identically for every row. Stop rather than hammering the API.
+            # A schema-level error will fail identically for every row, so stop
+            # rather than hammering the API with the same broken payload.
             if "ColumnValueException" in str(exc):
                 raise RuntimeError(
                     f"Monday rejected the column values for {cid}. This is a "
                     "schema problem and will fail for every row, so the sync "
                     f"is stopping.\n\n{exc}"
                 ) from exc
-            logger.warning("Failed to push %s: %s", cid, exc)
+            logger.warning("Failed to sync %s: %s", cid, exc)
+            failed += 1
         except requests.RequestException as exc:
-            logger.warning("Failed to push %s: %s", cid, exc)
+            logger.warning("Failed to sync %s: %s", cid, exc)
+            failed += 1
 
         time.sleep(RATE_LIMIT_SLEEP)
 
-    logger.info("Synced %d of %d items to Monday CRM", pushed, len(campaigns))
+    pushed = created + updated
+    logger.info(
+        "Synced %d of %d items to Monday CRM (%d created, %d updated, %d failed)",
+        pushed,
+        len(campaigns),
+        created,
+        updated,
+        failed,
+    )
     return pushed
