@@ -23,7 +23,7 @@ The pipeline moves customer data through six stages: extraction from Mandera's P
 ## Documentation
  
 - **[Data Dictionary](docs/DATA_DICTIONARY.md)** - every field, its type, how it is derived, and the business rules behind every classification
-- **[Live Monday CRM board](https://samuelede.monday.com/boards/5100020222)** - the activation surface, populated by the pipeline
+- **[Live Monday CRM board](https://view.monday.com/5100020222-8a6f2e317abe13842133ce9323e4e9fb?r=euc1&is_sharable_link=true)** - the activation surface, populated by the pipeline
   
 ## Output datasets (analytics schema)
  
@@ -297,7 +297,7 @@ docker compose exec data-db psql -U postgres -d mandera \
  
 ![CommercePulse customer intelligence board in Monday CRM](docs/monday-crm-board.png)
  
-**Live board:** [CommercePulse Customer Intelligence](https://samuelede.monday.com/boards/5100020222)
+**Live board:** [CommercePulse Customer Intelligence](https://view.monday.com/5100020222-8a6f2e317abe13842133ce9323e4e9fb?r=euc1&is_sharable_link=true)
  
 This is the point of the whole pipeline. Analytics that stay in a warehouse cannot be acted on; a sales rep does not open psql. The board puts customer intelligence where the people who act on it already work.
  
